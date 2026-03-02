@@ -2,7 +2,7 @@ use anyhow::Result;
 use url::Url;
 
 use crate::{
-    llm::{fallback_summary, GroqClient},
+    llm::{fallback_summary, LlmClient},
     models::SearchResult,
     tools::{web_contents, web_search},
 };
@@ -10,7 +10,7 @@ use crate::{
 pub struct WebAgent {
     num_results: usize,
     summary_length: usize,
-    llm: Option<GroqClient>,
+    llm: Option<LlmClient>,
 }
 
 impl WebAgent {
@@ -18,7 +18,7 @@ impl WebAgent {
         Ok(Self {
             num_results,
             summary_length,
-            llm: GroqClient::from_env(),
+            llm: LlmClient::from_env(),
         })
     }
 

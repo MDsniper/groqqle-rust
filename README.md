@@ -8,7 +8,7 @@ Rust reimplementation of key Groqqle behavior inspired by J. Gravelle's original
 - CLI search mode (`web` or `news`)
 - HTTP API mode with `POST /search`
 - URL content fetching + summarization flow
-- Optional Groq-backed summarization (`GROQ_API_KEY`)
+- Optional GLM-5 or Groq summarization (`GLM_API_KEY` preferred)
 - Provider/tool/agent separation similar to original architecture
 
 ## Build
@@ -47,7 +47,10 @@ curl -s http://127.0.0.1:5000/search \
 
 ## Environment variables
 
-- `GROQ_API_KEY` (optional): enables Groq summarization
+- `GLM_API_KEY` (optional): enables GLM summarization (preferred)
+- `GLM_MODEL` (optional): defaults to `glm-5`
+- `GLM_BASE_URL` (optional): defaults to `https://open.bigmodel.cn/api/paas/v4/chat/completions`
+- `GROQ_API_KEY` (optional fallback): enables Groq summarization when GLM is not set
 - `GROQ_MODEL` (optional): defaults to `llama3-8b-8192`
 - `BRAVE_API_KEY` (optional): enables Brave Search API in `web_search`
 
