@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::models::SearchResult;
 
 pub async fn search(query: &str, num_results: usize) -> Result<Vec<SearchResult>> {
-    let key = std::env::var("BRAVE_API_KEY").ok();
+    let key = crate::config::get_setting("BRAVE_API_KEY").or_else(|| std::env::var("BRAVE_API_KEY").ok());
     if let Some(key) = key {
         let resp = Client::new()
             .get("https://api.search.brave.com/res/v1/web/search")

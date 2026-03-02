@@ -1,5 +1,6 @@
 mod agents;
 mod api;
+mod config;
 mod llm;
 mod models;
 mod tools;

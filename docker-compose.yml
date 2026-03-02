@@ -1,0 +1,9 @@
+services:
+  groqqle-rust:
+    build: .
+    container_name: groqqle-rust
+    restart: unless-stopped
+    ports:
+      - "3034:5000"
+    volumes:
+      - ./data:/data

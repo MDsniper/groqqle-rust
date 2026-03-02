@@ -7,6 +7,7 @@ Rust reimplementation of key Groqqle behavior inspired by J. Gravelle's original
 
 - CLI search mode (`web` or `news`)
 - HTTP API mode with `POST /search`
+- Built-in web GUI at `/` and settings page at `/settings`
 - URL content fetching + summarization flow
 - Optional GLM-5 or Groq summarization (`GLM_API_KEY` preferred)
 - Provider/tool/agent separation similar to original architecture
@@ -36,6 +37,12 @@ cargo run -- search "https://www.rust-lang.org/"
 ```bash
 cargo run -- api --port 5000 --num-results 10 --summary-length 300
 ```
+
+Then open:
+- GUI: `http://127.0.0.1:5000/`
+- Settings: `http://127.0.0.1:5000/settings`
+
+You can add/remove API keys from `/settings` without restarting.
 
 Example request:
 

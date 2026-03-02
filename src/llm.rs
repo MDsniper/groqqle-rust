@@ -18,10 +18,19 @@ pub struct LlmClient {
 impl LlmClient {
     pub fn from_env() -> Option<Self> {
         // Prefer GLM when configured
-        if let Ok(api_key) = std::env::var("GLM_API_KEY") {
-            let model = std::env::var("GLM_MODEL").unwrap_or_else(|_| "glm-5".to_string());
-            let base_url = std::env::var("GLM_BASE_URL")
-                .unwrap_or_else(|_| "https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string());
+        let cfg_glm_key = crate::config::get_setting("GLM_API_KEY");
+        let cfg_glm_model = crate::config::get_setting("GLM_MODEL");
+        let cfg_glm_base = crate::config::get_setting("GLM_BASE_URL");
+        let cfg_groq_key = crate::config::get_setting("GROQ_API_KEY");
+        let cfg_groq_model = crate::config::get_setting("GROQ_MODEL");
+
+        if let Some(api_key) = cfg_glm_key.or_else(|| std::env::var("GLM_API_KEY").ok()) {
+            let model = cfg_glm_model
+                .or_else(|| std::env::var("GLM_MODEL").ok())
+                .unwrap_or_else(|| "glm-5".to_string());
+            let base_url = cfg_glm_base
+                .or_else(|| std::env::var("GLM_BASE_URL").ok())
+                .unwrap_or_else(|| "https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string());
             return Some(Self {
                 api_key,
                 http: Client::new(),
@@ -31,8 +40,10 @@ impl LlmClient {
             });
         }
 
-        if let Ok(api_key) = std::env::var("GROQ_API_KEY") {
-            let model = std::env::var("GROQ_MODEL").unwrap_or_else(|_| "llama3-8b-8192".to_string());
+        if let Some(api_key) = cfg_groq_key.or_else(|| std::env::var("GROQ_API_KEY").ok()) {
+            let model = cfg_groq_model
+                .or_else(|| std::env::var("GROQ_MODEL").ok())
+                .unwrap_or_else(|| "llama3-8b-8192".to_string());
             return Some(Self {
                 api_key,
                 http: Client::new(),
