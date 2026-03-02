@@ -8,12 +8,13 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     agents::{news::NewsAgent, web::WebAgent},
     config::{load_config, save_config, AppConfig},
-    models::SearchRequest,
+    llm::{fallback_summary, LlmClient},
+    models::{SearchRequest, SearchResult},
 };
 
 #[derive(Clone)]
@@ -32,6 +33,27 @@ struct SettingsForm {
     groq_model: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AskRequest {
+    query: String,
+    #[serde(default = "default_search_type")]
+    search_type: String,
+    #[serde(default)]
+    deep: bool,
+    #[serde(default)]
+    official_only: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AskResponse {
+    answer: String,
+    results: Vec<SearchResult>,
+}
+
+fn default_search_type() -> String {
+    "web".to_string()
+}
+
 pub async fn run_api(port: u16, default_num_results: usize, default_summary_length: usize) -> Result<()> {
     let state = AppState {
         default_num_results,
@@ -41,6 +63,7 @@ pub async fn run_api(port: u16, default_num_results: usize, default_summary_leng
     let app = Router::new()
         .route("/", get(index_page))
         .route("/search", post(search_handler))
+        .route("/ask", post(ask_handler))
         .route("/settings", get(settings_page).post(save_settings))
         .with_state(state);
 
@@ -67,13 +90,17 @@ async fn index_page() -> Html<&'static str> {
     .title { font-size:28px; font-weight:700; }
     .muted { color:#9fb0d8; }
     .card { background:#121a33; border:1px solid #223055; border-radius:14px; padding:14px; }
-    form { display:grid; grid-template-columns: 1fr 120px 110px; gap:10px; }
+    form { display:grid; grid-template-columns: 1fr 110px 110px; gap:10px; }
+    .opts{display:flex; gap:14px; margin-top:10px; color:#b7c5ea; font-size:14px;}
     input, select, button { border-radius:10px; border:1px solid #2a3a68; background:#0f1630; color:#e6ecff; padding:10px; }
     button { background:#3159ff; border-color:#3159ff; font-weight:600; cursor:pointer; }
+    #answer { margin-top:14px; display:none; }
+    .answer { background:#182244; border:1px solid #2b3d75; border-radius:12px; padding:14px; line-height:1.5; }
     #results { margin-top:14px; display:grid; gap:10px; }
     .r { background:#10172f; border:1px solid #223055; border-radius:12px; padding:12px; }
     .r a { color:#9dc1ff; text-decoration:none; font-weight:600; }
     .r p { margin:8px 0 0; color:#c9d6f8; line-height:1.4; }
+    .chip {display:inline-block; font-size:12px; padding:4px 8px; border-radius:99px; background:#24335f; color:#cdd8ff; margin-bottom:8px;}
   </style>
 </head>
 <body>
@@ -81,7 +108,7 @@ async fn index_page() -> Html<&'static str> {
     <div class='top'>
       <div>
         <div class='title'>Groqqle Rust</div>
-        <div class='muted'>Perplexity-style dark search UI</div>
+        <div class='muted'>Answer-first research with your own models + keys</div>
       </div>
       <a class='muted' href='/settings'>Settings</a>
     </div>
@@ -93,40 +120,56 @@ async fn index_page() -> Html<&'static str> {
           <option value='web'>Web</option>
           <option value='news'>News</option>
         </select>
-        <button type='submit'>Search</button>
+        <button type='submit'>Ask</button>
       </form>
+      <div class='opts'>
+        <label><input type='checkbox' id='deep'/> Deep answer</label>
+        <label><input type='checkbox' id='official'/> Prefer official docs</label>
+      </div>
     </div>
 
+    <div id='answer'><div class='answer' id='answerText'></div></div>
     <div id='results'></div>
   </div>
 
 <script>
 const results = document.getElementById('results');
+const answerWrap = document.getElementById('answer');
+const answerText = document.getElementById('answerText');
+
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
     query: document.getElementById('q').value,
     search_type: document.getElementById('t').value,
-    num_results: 5,
-    summary_length: 300
+    deep: document.getElementById('deep').checked,
+    official_only: document.getElementById('official').checked
   };
 
-  results.innerHTML = "<div class='muted'>Searching…</div>";
+  answerWrap.style.display = 'none';
+  results.innerHTML = "<div class='muted'>Thinking…</div>";
 
-  const r = await fetch('/search', {
+  const r = await fetch('/ask', {
     method:'POST',
     headers:{'content-type':'application/json'},
     body: JSON.stringify(body)
   });
   const j = await r.json();
 
-  if (!Array.isArray(j) || j.length === 0) {
+  if (j.answer) {
+    answerWrap.style.display = 'block';
+    answerText.textContent = j.answer;
+  }
+
+  const arr = Array.isArray(j.results) ? j.results : [];
+  if (arr.length === 0) {
     results.innerHTML = "<div class='muted'>No results.</div>";
     return;
   }
 
-  results.innerHTML = j.map(item => `
+  results.innerHTML = arr.map((item, i) => `
     <div class='r'>
+      <div class='chip'>Source ${i+1}</div>
       <a href='${item.url}' target='_blank' rel='noopener'>${item.title || 'Untitled'}</a>
       <div class='muted'>${item.url || ''}</div>
       <p>${item.description || ''}</p>
@@ -185,10 +228,93 @@ async fn save_settings(Form(f): Form<SettingsForm>) -> impl IntoResponse {
     }
 }
 
+async fn ask_handler(
+    State(state): State<AppState>,
+    Json(req): Json<AskRequest>,
+) -> Result<Json<AskResponse>, axum::http::StatusCode> {
+    let num_results = if req.deep { 8 } else { state.default_num_results.min(5) };
+
+    let mut results = if req.search_type.eq_ignore_ascii_case("news") {
+        NewsAgent::new(num_results)
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+            .process_request(&req.query)
+            .await
+    } else {
+        WebAgent::new(num_results, state.default_summary_length)
+            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+            .process_request(&req.query)
+            .await
+    }
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if req.official_only {
+        results.sort_by_key(|r| score_source(&r.url));
+        results.reverse();
+    }
+
+    let answer = synthesize_answer(&req.query, &results, req.deep).await;
+
+    Ok(Json(AskResponse { answer, results }))
+}
+
+fn score_source(url: &str) -> i32 {
+    let u = url.to_lowercase();
+    if u.contains("docs.") || u.contains("developer.") || u.contains("github.com") {
+        3
+    } else if u.contains("medium.com") || u.contains("reddit.com") {
+        1
+    } else {
+        2
+    }
+}
+
+async fn synthesize_answer(query: &str, results: &[SearchResult], deep: bool) -> String {
+    let context = results
+        .iter()
+        .take(6)
+        .enumerate()
+        .map(|(i, r)| format!("[{}] {}\nURL: {}\n{}", i + 1, r.title, r.url, r.description))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let prompt = format!(
+        "Answer the user query using only the sources below. Keep it practical and concise.\n\nQuery: {}\nMode: {}\n\nSources:\n{}\n\nReturn: direct answer + bullet citations like [1], [2].",
+        query,
+        if deep { "deep" } else { "fast" },
+        context
+    );
+
+    if let Some(llm) = LlmClient::from_env() {
+        if let Ok(out) = llm.summarize(&prompt, if deep { 900 } else { 500 }).await {
+            return out;
+        }
+    }
+
+    let fallback = results
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(i, r)| format!("- [{}] {}", i + 1, r.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "Quick answer based on retrieved sources:\n{}\n\n{}",
+        fallback_summary(&fallback, if deep { 1400 } else { 700 }),
+        results
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(i, r)| format!("[{}] {}", i + 1, r.url))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 async fn search_handler(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
-) -> Result<Json<Vec<crate::models::SearchResult>>, axum::http::StatusCode> {
+) -> Result<Json<Vec<SearchResult>>, axum::http::StatusCode> {
     let num_results = if req.num_results == 0 {
         state.default_num_results
     } else {
